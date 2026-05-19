@@ -1,402 +1,286 @@
-'use strict';
+let video;
+let handPose;
+let hands = [];
+let stars = []; 
 
-// ─────────────────────────────────────────────────────────────
-//  CONFIG & 全螢幕佈局
-// ─────────────────────────────────────────────────────────────
-const cv = document.getElementById('c');
-const g = cv.getContext('2d');
-const vid = document.getElementById('vid');
+// 猜拳遊戲相關變數
+let playerChoice = "請出拳...";
+let computerChoice = "等待中...";
+let gameResult = "看看誰會贏？";
+let choices = [" 石頭", " 剪刀", " 布"];
+let lastMatchTime = 0;
 
-// 讓畫布填滿整個視窗
-let W = window.innerWidth, H = window.innerHeight;
-cv.width = W; cv.height = H;
+// 啟動鎖（安卓通常直接開，但保留此機制以防萬一）
+let isCameraStarted = false;
 
-window.addEventListener('resize', () => {
-    W = window.innerWidth; H = window.innerHeight;
-    cv.width = W; cv.height = H;
-});
-
-const PICKS = ['rock', 'paper', 'scissors'];
-const EM = { rock: '✊', paper: '🖐', scissors: '✌️', triangle: '🔺', cross: '❌' };
-const LB = { rock: '石頭', paper: '布', scissors: '剪刀', triangle: '三角形', cross: '叉叉' };
-const BEATS = { rock: 'scissors', scissors: 'paper', paper: 'rock' };
-
-// 全新風格調色盤：清新優雅粉紫與療癒馬卡龍色
-const BG_COLOR = '#e7c6ff';      // 畫布背景色
-const MAIN_TXT = '#4a154b';      // 主要文字顏色 (深紫)
-const CARD_BG = 'rgba(255, 255, 255, 0.85)'; // 簡約白色半透明卡片背景
-const PAL = ['#ffb5a7', '#fcd5ce', '#f8edeb', '#f9dec9', '#e8e8e4', '#d8f3dc', '#b7e4c7', '#74c69d'];
-
-const SKEL = [[0, 1], [1, 2], [2, 3], [3, 4], [0, 5], [5, 6], [6, 7], [7, 8], [5, 9], [9, 10], [10, 11], [11, 12],
-    [9, 13], [13, 14], [14, 15], [15, 16], [13, 17], [0, 17], [17, 18], [18, 19], [19, 20]];
-
-// ─────────────────────────────────────────────────────────────
-//  STATE MANAGEMENT
-// ─────────────────────────────────────────────────────────────
-let st = 'loading', stAt = Date.now();
-const enter = s => { st = s; stAt = Date.now(); };
-
-let pG = null, cG = null;         
-let lm = null, stable = null, handedness = null; 
-let gBuf = [], holdT = null;      
-let menuHoldT = null;             
-const BUF = 10, HOLD = 400, CD = 3; 
-
-let score = { w: 0, l: 0, d: 0 };
-let parts = [];
-
-let mx = 0, my = 0;
-cv.addEventListener('mousemove', e => { const r = cv.getBoundingClientRect(); mx = e.clientX - r.left; my = e.clientY - r.top; });
-cv.addEventListener('click', onClk);
-
-// ─────────────────────────────────────────────────────────────
-//  MEDIAPIPE INIT
-// ─────────────────────────────────────────────────────────────
-(function () {
-    const hands = new Hands({ locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${f}` });
-    hands.setOptions({ maxNumHands: 1, modelComplexity: 1, minDetectionConfidence: .72, minTrackingConfidence: .5 });
-    hands.onResults(r => {
-        if (r.multiHandLandmarks && r.multiHandLandmarks[0]) {
-            lm = r.multiHandLandmarks[0];
-            handedness = r.multiHandedness[0].label; 
-            const gest = classify(lm);
-            gBuf.push(gest); if (gBuf.length > BUF) gBuf.shift();
-            stable = vote(gBuf);
-        } else {
-            lm = null; stable = null; handedness = null; gBuf = [];
-        }
-    });
-    new Camera(vid, { onFrame: async () => hands.send({ image: vid }), width: 640, height: 480 })
-        .start().then(() => { if (st === 'loading') enter('idle'); });
-})();
-
-// ─────────────────────────────────────────────────────────────
-//  GESTURE CLASSIFICATION (新增 三角形 與 叉叉 判定)
-// ─────────────────────────────────────────────────────────────
-function classify(l) {
-    const tips = [8, 12, 16, 20], pips = [6, 10, 14, 18];
-    const ext = tips.map((t, i) => l[t].y < l[pips[i]].y); // 食指、中指、無名指、小指
-    const n = ext.filter(Boolean).length;
-
-    // 🔺 三角形：食指、中指、無名指伸直，小指收起 (3隻手指)
-    if (ext[0] && ext[1] && ext[2] && !ext[3]) return 'triangle';
-    
-    // ❌ 叉叉：食指、小指伸直，中指、無名指收起 (搖滾手勢)
-    if (ext[0] && !ext[1] && !ext[2] && ext[3]) return 'cross';
-
-    // 猜拳經典手勢
-    if (n === 0) return 'rock';
-    if (n >= 3) return 'paper';
-    if (ext[0] && ext[1] && !ext[2] && !ext[3]) return 'scissors';
-    return 'unknown';
+function preload() {
+  handPose = ml5.handPose();
 }
 
-function vote(buf) {
-    if (buf.length < 6) return null;
-    const c = {}; buf.forEach(v => { c[v] = (c[v] || 0) + 1; });
-    let b = null, bn = 0;
-    for (const v in c) if (v !== 'unknown' && c[v] > bn) { bn = c[v]; b = v; }
-    return bn / buf.length >= .55 ? b : null;
+function setup() {
+  // 自動適應手機螢幕大小
+  createCanvas(windowWidth, windowHeight);
+  
+  // 【安卓優化】：強制指定開啟前置鏡頭 (facingMode: 'user')
+  let constraints = {
+    video: {
+      facingMode: 'user'
+    },
+    audio: false
+  };
+
+  video = createCapture(constraints, function(stream) {
+    isCameraStarted = true; 
+  });
+  video.hide();
+
+  handPose.detectStart(video, gotHands);
 }
 
-// ─────────────────────────────────────────────────────────────
-//  簡單繽紛粒子系統 (贏球時散落馬卡龍亮片)
-// ─────────────────────────────────────────────────────────────
-function burst(x, y, n = 30) {
-    for (let i = 0; i < n; i++) {
-        const a = Math.random() * Math.PI * 2, sp = Math.random() * 4 + 1;
-        parts.push({
-            x, y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp,
-            life: 1, dec: Math.random() * .02 + .01, sz: Math.random() * 6 + 4,
-            col: PAL[Math.random() * PAL.length | 0]
-        });
-    }
+function gotHands(results) {
+  hands = results;
 }
 
-// ─────────────────────────────────────────────────────────────
-//  DRAW UTILITIES & 視訊區塊計算
-// ─────────────────────────────────────────────────────────────
-// 計算視訊要在正中央顯示 50% 大小的尺寸與座標
-function getVidRect() {
-    const vW = W * 0.5;
-    const vH = H * 0.5;
-    return {
-        w: vW, h: vH,
-        x: (W - vW) / 2,
-        y: (H - vH) / 2
+// 觸控解鎖（保留給部分安卓瀏覽器如 LINE 內建瀏覽器阻擋時使用）
+function touchStarted() {
+  if (!isCameraStarted && video) {
+    video.remove();
+    let constraints = {
+      video: { facingMode: 'user' },
+      audio: false
     };
+    video = createCapture(constraints);
+    video.hide();
+    handPose.detectStart(video, gotHands);
+    isCameraStarted = true;
+  }
+  if (getAudioContext().state === 'suspended') {
+    getAudioContext().resume();
+  }
+  return false;
 }
 
-// 轉換手勢骨架座標至中央視訊內
-function lxy(p) {
-    const vr = getVidRect();
-    return [vr.x + (1 - p.x) * vr.w, vr.y + p.y * vr.h];
-}
+function draw() {
+  background('#c6ffcb');
 
-function rr(x, y, w, h, r) {
-    g.beginPath(); g.moveTo(x + r, y);
-    g.arcTo(x + w, y, x + w, y + h, r); g.arcTo(x + w, y + h, x, y + h, r);
-    g.arcTo(x, y + h, x, y, r); g.arcTo(x, y, x + w, y, r); g.closePath();
-}
+  // 1. 畫布正上方的學生資訊文字
+  fill(50);
+  noStroke();
+  textSize(28); // 稍微縮小字體以符合手機螢幕
+  textAlign(CENTER, TOP);
+  text("414730894呂承諺", width / 2, 20);
 
-function drawVid() {
-    if (!vid || vid.readyState < 2) return;
-    const vr = getVidRect();
-    g.save();
-    // 移動至視訊區塊右側再翻轉，達到區塊內左右顛倒(鏡像)的效果
-    g.translate(vr.x + vr.w, vr.y);
-    g.scale(-1, 1);
-    g.drawImage(vid, 0, 0, vr.w, vr.h);
-    g.restore();
+  if (!isCameraStarted || !video) {
+    fill(94, 84, 142);
+    textSize(20);
+    textAlign(CENTER, CENTER);
+    text(" 遊戲載入中...\n\n若畫面沒有反應，請點擊螢幕\n允許相機權限喔！", width / 2, height / 2);
+    return;
+  }
 
-    // 為中央視訊加上優雅的外框
-    g.strokeStyle = '#FFFFFF';
-    g.lineWidth = 6;
-    rr(vr.x, vr.y, vr.w, vr.h, 12);
-    g.stroke();
-}
+  // 【手機版畫面適應】：讓視訊畫面能完美塞進手機螢幕
+  let imgW = width * 0.85; // 寬度佔螢幕 85%
+  let imgH = (imgW / video.width) * video.height; // 依比例計算高度
+  let offsetX = (width - imgW) / 2;
+  let offsetY = 80; // 留給上方文字空間
 
-function skel() {
-    if (!lm) return;
-    g.save();
-    g.strokeStyle = '#4a154b'; g.lineWidth = 3;
-    SKEL.forEach(([a, b]) => {
-        const [ax, ay] = lxy(lm[a]), [bx, by] = lxy(lm[b]);
-        g.beginPath(); g.moveTo(ax, ay); g.lineTo(bx, by); g.stroke();
-    });
-    lm.forEach((p, i) => {
-        const [x, y] = lxy(p);
-        g.fillStyle = i ? '#ffb5a7' : '#4a154b';
-        g.beginPath(); g.arc(x, y, i ? 4 : 7, 0, Math.PI * 2); g.fill();
-    });
-    g.restore();
-}
+  // 繪製攝影機影像
+  image(video, offsetX, offsetY, imgW, imgH);
 
-function txt(t, x, y, fs, col = MAIN_TXT, align = 'center') {
-    g.save(); g.font = `bold ${fs}px Arial`; g.textAlign = align; g.textBaseline = 'middle';
-    g.fillStyle = col; g.fillText(t, x, y); g.restore();
-}
+  // UI 往下推，放在視訊畫面下方
+  drawGameUI(offsetY + imgH);
 
-function scoreHUD() {
-    const vr = getVidRect();
-    g.save();
-    g.fillStyle = CARD_BG;
-    rr(vr.x, vr.y - 55, vr.w, 40, 8); g.fill();
-    const midX = vr.x + vr.w / 2;
-    txt(`🌸 戰績 ─  贏: ${score.w}  |  輸: ${score.l}  |  平: ${score.d}`, midX, vr.y - 35, 16);
-    g.restore();
-}
+  if (hands.length > 0) {
+    for (let hand of hands) {
+      if (hand.confidence > 0.1) {
+        
+        if (millis() - lastMatchTime > 500) {
+          judgeGesture(hand);
+        }
 
-function btn(lbl, x, y, w, h, bg) {
-    const hov = mx >= x && mx <= x + w && my >= y && my <= y + h;
-    g.save();
-    g.fillStyle = hov ? '#FFF' : bg;
-    rr(x, y, w, h, 10); g.fill();
-    g.lineWidth = 2; g.strokeStyle = MAIN_TXT; g.stroke();
-    txt(lbl, x + w / 2, y + h / 2, 16, hov ? bg : MAIN_TXT);
-    g.restore();
-}
+        let handColor = hand.handedness == "Left" ? color(255, 0, 255) : color(255, 255, 0);
+        strokeWeight(3);
+        stroke(handColor);
+        drawFinger(hand, 0, 4, offsetX, offsetY, imgW, imgH);  
+        drawFinger(hand, 5, 8, offsetX, offsetY, imgW, imgH);  
+        drawFinger(hand, 9, 12, offsetX, offsetY, imgW, imgH);  
+        drawFinger(hand, 13, 16, offsetX, offsetY, imgW, imgH);
+        drawFinger(hand, 17, 20, offsetX, offsetY, imgW, imgH);
 
-// ─────────────────────────────────────────────────────────────
-//  各狀態渲染面 (風格全面簡約平面化)
-// ─────────────────────────────────────────────────────────────
-function dLoading() {
-    txt('正在載入 AI 魔法辨識中...', W / 2, H / 2, 24);
-}
+        noStroke();
+        for (let i = 0; i < hand.keypoints.length; i++) {
+          let kp = hand.keypoints[i];
+          let kx = map(kp.x, 0, video.width, offsetX, offsetX + imgW);
+          let ky = map(kp.y, 0, video.height, offsetY, offsetY + imgH);
+          
+          fill(handColor);
+          circle(kx, ky, 8); // 手機上圓點稍微縮小一點點
 
-function dIdle() {
-    skel(); scoreHUD();
-    const vr = getVidRect();
-    
-    // 下方提示文字卡片
-    g.fillStyle = CARD_BG;
-    rr(vr.x, vr.y + vr.h + 20, vr.w, 75, 12); g.fill();
-
-    if (!lm) {
-        txt('👋 請將手伸入畫面中', W / 2, vr.y + vr.h + 42, 18);
-        txt('比出 ✊ 石頭 · 🖐 布 · ✌️ 剪刀 開始遊戲', W / 2, vr.y + vr.h + 68, 14, '#777');
-    } else if (stable && PICKS.includes(stable)) {
-        txt(`已鎖定手勢：${EM[stable]} ${LB[stable]}`, W / 2, vr.y + vr.h + 42, 18);
-        const pct = holdT ? Math.min(1, (Date.now() - holdT) / HOLD) : 0;
-        g.fillStyle = '#e8e8e4'; rr(W / 2 - 100, vr.y + vr.h + 62, 200, 8, 4); g.fill();
-        g.fillStyle = '#ffb5a7'; rr(W / 2 - 100, vr.y + vr.h + 62, 200 * pct, 8, 4); g.fill();
-    } else {
-        txt('請比出出拳手勢並維持住', W / 2, vr.y + vr.h + 55, 16);
-    }
-}
-
-function dCountdown() {
-    skel(); scoreHUD();
-    const vr = getVidRect();
-    const el = Date.now() - stAt;
-    const rem = CD * 1000 - el, sc = Math.ceil(rem / 1000);
-    
-    // 大大的倒數數字浮現在畫面中央
-    txt(sc, W / 2, H / 2, 100, '#4a154b');
-    
-    g.fillStyle = CARD_BG;
-    rr(vr.x, vr.y + vr.h + 20, vr.w, 50, 10); g.fill();
-    txt(`你出了：${EM[pG]} ${LB[pG]}！ 電腦思考中...`, W / 2, vr.y + vr.h + 45, 16);
-}
-
-function dReveal() {
-    scoreHUD();
-    const vr = getVidRect();
-    const el = Date.now() - stAt;
-    const cpuShow = el > 500;
-
-    // 清晰簡約的對決看板
-    g.fillStyle = CARD_BG;
-    rr(vr.x, vr.y + vr.h + 20, vr.w, 90, 12); g.fill();
-
-    txt(`你出: ${EM[pG]} ${LB[pG]}`, vr.x + vr.w * 0.25, vr.y + vr.h + 65, 22);
-    txt('VS', W / 2, vr.y + vr.h + 65, 20, '#aaa');
-    txt(`電腦出: ${cpuShow ? EM[cG] + ' ' + LB[cG] : '❓'}`, vr.x + vr.w * 0.75, vr.y + vr.h + 65, 22);
-}
-
-// 簡化後的清爽輸贏結果呈現
-function dResultCommon(title, sub, color) {
-    scoreHUD();
-    const vr = getVidRect();
-    
-    // 簡單漂亮的亮色滿版大條幅
-    g.fillStyle = color;
-    g.fillRect(0, vr.y + vr.h + 15, W, 100);
-
-    txt(title, W / 2, vr.y + vr.h + 45, 32, MAIN_TXT);
-    txt(sub, W / 2, vr.y + vr.h + 85, 16, MAIN_TXT);
-
-    // 噴發粒子動畫渲染
-    parts.forEach(p => { p.x += p.vx; p.y += p.vy; p.life -= p.dec; });
-    parts = parts.filter(p => p.life > 0);
-    parts.forEach(p => {
-        g.save(); g.globalAlpha = p.life; g.fillStyle = p.col;
-        g.beginPath(); g.arc(p.x, p.y, p.sz, 0, Math.PI * 2); g.fill(); g.restore();
-    });
-}
-
-function dWin() {  dResultCommon('🎉 你贏了！太厲害了！', `你的 ${EM[pG]} 打敗了 電腦的 ${EM[cG]}`, '#d8f3dc'); }
-function dLose() { dResultCommon('😭 輸掉了，再接再厲！', `你的 ${EM[pG]} 輸給了 電腦的 ${EM[cG]}`, '#ffb5a7'); }
-function dDraw() { dResultCommon('🤝 平手！不分上下！', `雙方都出了 ${EM[pG]}`, '#fcd5ce'); }
-
-function dMenu() {
-    scoreHUD();
-    const vr = getVidRect();
-    
-    g.fillStyle = 'rgba(255, 255, 255, 0.92)';
-    rr(vr.x - 20, vr.y - 10, vr.w + 40, vr.h + 150, 16); g.fill();
-
-    txt('要再玩一局嗎？', W / 2, H / 2 - 60, 28);
-    txt('請比出下方手勢進行選擇：', W / 2, H / 2 - 20, 14, '#666');
-
-    const bw = 140, bh = 50, by = H / 2 + 20;
-    btn('❌ 結束遊戲', W / 2 - bw - 20, by, bw, bh, '#ffb5a7');
-    btn('🔺 繼續遊戲', W / 2 + 20, by, bw, bh, '#b7e4c7');
-
-    txt('💡 提示：比出 🔺 (3指伸直) 繼續  ·  比出 ❌ (惡魔角) 結束', W / 2, by + bh + 30, 14, '#555');
-
-    // 選單手勢鎖定進度條
-    if (stable === 'triangle' || stable === 'cross') {
-        const pct = menuHoldT ? Math.min(1, (Date.now() - menuHoldT) / HOLD) : 0;
-        const col = stable === 'triangle' ? '#74c69d' : '#ffb5a7';
-        g.fillStyle = '#e8e8e4'; rr(W / 2 - 100, by + bh + 55, 200, 8, 4); g.fill();
-        g.fillStyle = col; rr(W / 2 - 100, by + bh + 55, 200 * pct, 8, 4); g.fill();
-    }
-}
-
-function dEnded() {
-    txt('感謝遊玩！遊戲已結束', W / 2, H / 2 - 30, 32);
-    txt(`最終戰績 ─ 贏: ${score.w} | 敗: ${score.l} | 平: ${score.d}`, W / 2, H / 2 + 15, 18, '#666');
-    txt('想要重新開始，請直接重新整理網頁唷！', W / 2, H / 2 + 60, 14, '#888');
-}
-
-// ─────────────────────────────────────────────────────────────
-//  邏輯更新
-// ─────────────────────────────────────────────────────────────
-function update() {
-    const now = Date.now(), el = now - stAt;
-
-    if (st === 'menu') {
-        if (stable === 'triangle' || stable === 'cross') {
-            if (!menuHoldT) menuHoldT = now;
-            if (now - menuHoldT >= HOLD) {
-                if (stable === 'triangle') startGame();
-                else enter('ended');
-                menuHoldT = null;
+          // 指尖產生星星效果
+          if (i === 4 || i === 8 || i === 12 || i === 16 || i === 20) {
+            if (frameCount % 2 === 0) {
+              stars.push(new Star(kx, ky, handColor));
             }
-        } else {
-            menuHoldT = null;
+          }
         }
+      }
     }
+  } else {
+    playerChoice = "請把手放到畫面中...";
+  }
 
-    if (st === 'idle') {
-        if (stable && PICKS.includes(stable)) {
-            if (pG !== stable) { holdT = now; pG = stable; }
-            if (now - holdT >= HOLD) enter('countdown');
-        } else {
-            holdT = null; pG = null;
-        }
+  // 更新與顯示星星
+  for (let i = stars.length - 1; i >= 0; i--) {
+    stars[i].update();
+    stars[i].display();
+    if (stars[i].isFaded) {
+      stars.splice(i, 1);
     }
-    
-    if (st === 'countdown') {
-        if (stable && PICKS.includes(stable)) pG = stable;
-        if (el >= CD * 1000) {
-            if (!pG) pG = PICKS[Math.random() * 3 | 0];
-            cG = PICKS[Math.random() * 3 | 0];
-            enter('reveal');
-        }
-    }
-    
-    if (st === 'reveal' && el > 1500) {
-        const res = pG === cG ? 'draw' : BEATS[pG] === cG ? 'win' : 'lose';
-        if (res === 'win') { score.w++; burst(W / 2, H / 2 + 100, 40); }
-        else if (res === 'lose') score.l++;
-        else score.d++;
-        enter(res);
-    }
-    
-    if ((st === 'win' && el > 4000) || (st === 'lose' && el > 3000) || (st === 'draw' && el > 3000)) {
-        enter('menu');
-    }
+  }
 }
 
-function onClk(e) {
-    if (st !== 'menu') return;
-    const r = cv.getBoundingClientRect();
-    const cx = e.clientX - r.left, cy = e.clientY - r.top;
-    const bw = 140, bh = 50, by = H / 2 + 20;
-    if (cx >= W / 2 + 20 && cx <= W / 2 + 20 + bw && cy >= by && cy <= by + bh) startGame(); 
-    if (cx >= W / 2 - bw - 20 && cx <= W / 2 - 20 && cy >= by && cy <= by + bh) enter('ended'); 
+// 手勢判定邏輯功能
+function judgeGesture(hand) {
+  let indexTip = hand.keypoints[8];
+  let middleTip = hand.keypoints[12];
+  let ringTip = hand.keypoints[16];
+  let pinkyTip = hand.keypoints[20];
+  let indexBase = hand.keypoints[5];
+  let middleBase = hand.keypoints[9];
+  let ringBase = hand.keypoints[13];
+  let pinkyBase = hand.keypoints[17];
+
+  let isIndexOpen = indexTip.y < indexBase.y;
+  let isMiddleOpen = middleTip.y < middleBase.y;
+  let isRingOpen = ringTip.y < ringBase.y;
+  let isPinkyOpen = pinkyTip.y < pinkyBase.y;
+
+  let currentPlay = "";
+
+  if (isIndexOpen && isMiddleOpen && isRingOpen && isPinkyOpen) {
+    currentPlay = " 布";
+  } else if (isIndexOpen && isMiddleOpen && !isRingOpen && !isPinkyOpen) {
+    currentPlay = " 剪刀";
+  } else if (!isIndexOpen && !isMiddleOpen && !isRingOpen && !isPinkyOpen) {
+    currentPlay = " 石頭";
+  } else {
+    currentPlay = "偵測中...";
+  }
+
+  if (currentPlay !== "偵測中..." && currentPlay !== playerChoice) {
+    playerChoice = currentPlay;
+    let randIdx = floor(random(3));
+    computerChoice = choices[randIdx];
+    calculateWinner(playerChoice, computerChoice);
+    lastMatchTime = millis();
+  }
 }
 
-function startGame() {
-    parts = []; gBuf = []; stable = null; holdT = null; menuHoldT = null; pG = null; cG = null; enter('idle');
+// 勝負計算
+function calculateWinner(p, c) {
+  if (p === c) gameResult = "平手！我們很有默契";
+  else if ((p === " 石頭" && c === " 剪刀") || (p === " 剪刀" && c === " 布") || (p === " 布" && c === " 石頭")) {
+    gameResult = " 你贏了！厲害";
+  } else {
+    gameResult = " 電腦贏了！再接再厲 ";
+  }
 }
 
-// ─────────────────────────────────────────────────────────────
-//  主迴圈 (LOOP)
-// ─────────────────────────────────────────────────────────────
-function loop() {
-    update();
-    
-    // 1. 清空畫布並填滿指定背景顏色 e7c6ff
-    g.fillStyle = BG_COLOR;
-    g.fillRect(0, 0, W, H);
-    
-    // 2. 繪製頂部置中指定的文字標題
-    txt("414730894呂承諺", W / 2, 45, 26, MAIN_TXT);
-
-    // 3. 繪製鏡像置中視訊 (加載與結束畫面除外)
-    if (st !== 'loading' && st !== 'ended') drawVid();
-    
-    // 4. 根據狀態渲染不同介面
-    const draw = {
-        loading: dLoading, idle: dIdle, countdown: dCountdown, reveal: dReveal,
-        win: dWin, lose: dLose, draw: dDraw, menu: dMenu, ended: dEnded
-    };
-    (draw[st] || dLoading)();
-    
-    requestAnimationFrame(loop);
+// 繪製遊戲 UI（針對手機寬度調整寬度）
+function drawGameUI(yPos) {
+  push();
+  rectMode(CENTER);
+  textAlign(CENTER, CENTER);
+  fill(255, 255, 255, 180);
+  noStroke();
+  
+  let uiWidth = min(width * 0.9, 450); // 寬度最大 450，或跟著螢幕跑
+  rect(width / 2, yPos + 60, uiWidth, 100, 15);
+  
+  textSize(18);
+  fill(0);
+  text(`你出：${playerChoice}`, width / 2 - 80, yPos + 45);
+  text(`電腦出：${computerChoice}`, width / 2 + 80, yPos + 45);
+  textSize(22);
+  textStyle(BOLD);
+  fill('#5e548e');
+  text(gameResult, width / 2, yPos + 85);
+  pop();
 }
 
-loop();
+// 輔助功能：畫指節線
+function drawFinger(hand, start, end, ox, oy, iw, ih) {
+  for (let i = start; i < end; i++) {
+    let pt1 = hand.keypoints[i];
+    let pt2 = hand.keypoints[i + 1];
+    let x1 = map(pt1.x, 0, video.width, ox, ox + iw);
+    let y1 = map(pt1.y, 0, video.height, oy, oy + ih);
+    let x2 = map(pt2.x, 0, video.width, ox, ox + iw);
+    let y2 = map(pt2.y, 0, video.height, oy, oy + ih);
+    line(x1, y1, x2, y2);
+  }
+}
+
+// === 閃爍星星 粒子類別 ===
+class Star {
+  constructor(x, y, col) {
+    this.x = x;
+    this.y = y;
+    this.color = col;
+    this.baseSize = random(8, 16); // 手機上稍微縮小星星，看起來更精緻
+    this.size = this.baseSize;
+    this.vx = random(-1.5, 1.5); 
+    this.vy = random(-3.5, -1); 
+    this.angle = random(TWO_PI); 
+    this.rotationSpeed = random(-0.08, 0.08); 
+    this.life = 1.0; 
+    this.fadeSpeed = random(0.02, 0.04); 
+  }
+
+  update() {
+    this.x += this.vx;
+    this.y += this.vy;
+    this.vy += 0.04; 
+    this.angle += this.rotationSpeed;
+    this.life -= this.fadeSpeed;
+    this.size = this.baseSize * this.life * (0.8 + 0.2 * sin(frameCount * 0.2 + this.x * 0.1));
+  }
+
+  display() {
+    push();
+    translate(this.x, this.y);
+    rotate(this.angle);
+    noStroke();
+    
+    let r = red(this.color);
+    let g = green(this.color);
+    let b = blue(this.color);
+    fill(r, g, b, this.life * 255);
+    
+    // 手機網頁若開啟發光會卡頓，這裡微調發光半徑，維持順暢度
+    drawingContext.shadowBlur = this.size * 0.5;
+    drawingContext.shadowColor = this.color;
+    
+    this.drawStarPattern(0, 0, this.size * 0.4, this.size, 5);
+    pop();
+  }
+
+  get isFaded() {
+    return this.life <= 0;
+  }
+
+  drawStarPattern(x, y, radius1, radius2, npoints) {
+    let angle = TWO_PI / npoints;
+    let halfAngle = angle / 2.0;
+    beginShape();
+    for (let a = 0; a < TWO_PI; a += angle) {
+      let sx = x + cos(a) * radius2;
+      let sy = y + sin(a) * radius2;
+      vertex(sx, sy);
+      sx = x + cos(a + halfAngle) * radius1;
+      sy = y + sin(a + halfAngle) * radius1;
+      vertex(sx, sy);
+    }
+    endShape(CLOSE);
+  }
+}
