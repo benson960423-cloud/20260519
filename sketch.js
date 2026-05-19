@@ -20,18 +20,27 @@ function preload() {
 function setup() {
   // 自動適應手機螢幕大小
   createCanvas(windowWidth, windowHeight);
-  
+
+  // 檢查是否在安全環境下執行
+  if (!window.isSecureContext && location.hostname !== "localhost") {
+    console.warn("攝影機需要 HTTPS 環境才能啟動。");
+  }
+
   // 【安卓優化】：強制指定開啟前置鏡頭 (facingMode: 'user')
   let constraints = {
     video: {
-      facingMode: 'user'
+      facingMode: 'user',
+      width: { ideal: 640 },
+      height: { ideal: 480 }
     },
     audio: false
   };
 
-  video = createCapture(constraints, function(stream) {
-    isCameraStarted = true; 
+  video = createCapture(constraints, (stream) => {
+    isCameraStarted = true;
+    console.log("攝影機已成功啟動");
   });
+  video.elt.setAttribute('playsinline', ''); // 解決 iOS/Android 自動播放問題
   video.hide();
 
   handPose.detectStart(video, gotHands);
@@ -43,16 +52,9 @@ function gotHands(results) {
 
 // 觸控解鎖（保留給部分安卓瀏覽器如 LINE 內建瀏覽器阻擋時使用）
 function touchStarted() {
-  if (!isCameraStarted && video) {
-    video.remove();
-    let constraints = {
-      video: { facingMode: 'user' },
-      audio: false
-    };
-    video = createCapture(constraints);
-    video.hide();
-    handPose.detectStart(video, gotHands);
-    isCameraStarted = true;
+  // 點擊畫面時強制讓影片播放 (部分瀏覽器安全性要求)
+  if (video && video.elt) {
+    video.elt.play();
   }
   if (getAudioContext().state === 'suspended') {
     getAudioContext().resume();
@@ -74,7 +76,7 @@ function draw() {
     fill(94, 84, 142);
     textSize(18);
     textAlign(CENTER, CENTER);
-    text("攝影機啟動中...", width / 2, height / 2);
+    text("攝影機啟動中...\n(若無反應請點擊畫面並檢查權限)", width / 2, height / 2);
     return;
   }
 
