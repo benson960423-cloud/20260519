@@ -1,60 +1,66 @@
 let handpose;
 let video;
 let hands = [];
-let gameState = "LOADING"; // LOADING, PLAYING, RESULT, GAMEOVER
+let gameState = "LOADING"; // LOADING, COUNTDOWN, PLAYING, RESULT, GAMEOVER
 let playerChoice = "";
 let computerChoice = "";
 let resultText = "";
 let lastGestureTime = 0;
+let countdownStart = 0;
 const gestureCooldown = 2000; 
 
+// 手勢對應的 Emoji
+const gestureEmoji = {
+  "石頭": "✊",
+  "剪刀": "✌️",
+  "布": "🖐"
+};
+
 function setup() {
-  // 1. 產生全螢幕畫布
   createCanvas(windowWidth, windowHeight);
   
-  // 2. 擷取攝影機影像
   video = createCapture(VIDEO);
-  video.size(640, 480); // 設定擷取解析度
+  video.size(640, 480);
   video.hide();
 
-  // 3. 初始化 ml5 handPose (注意 P 大寫，這是 1.x 版本的語法)
   handpose = ml5.handPose(video, () => {
     console.log("模型已載入！");
-    gameState = "PLAYING";
+    // 模型載入後，直接進入倒數階段
+    startCountdown();
   });
 
-  // 開始持續偵測
   handpose.detectStart(video, results => {
     hands = results;
   });
 
   textAlign(CENTER, CENTER);
-  textSize(32);
 }
 
 function draw() {
-  // 背景顏色
   background('#e7c6ff');
   
-  // 計算 50% 畫布大小的影像寬高
-  let vWidth = width * 0.5;
-  let vHeight = height * 0.5;
+  // --- 1. 攝影機畫面 (固定在畫面上半部) ---
+  let vWidth = width * 0.8; 
+  let vHeight = (vWidth * 480) / 640; // 保持比例
+  let videoY = height * 0.25; // 放在偏上方，避免擋住下方 UI
 
-  // 繪製攝影機畫面：置中 + 水平翻轉
   push();
-  translate(width / 2, height / 2);
-  scale(-1, 1); // 左右翻轉
-  image(video, -vWidth / 2, -vHeight / 2, vWidth, vHeight);
+  translate(width / 2, videoY); // 移動到畫布上方中間
+  scale(-1, 1); 
+  imageMode(CENTER);
+  image(video, 0, 0, vWidth, vHeight);
   pop();
 
-  // 遊戲 UI 邏輯 (UI 不要跟著影像翻轉)
+  // --- 2. 遊戲 UI (顯示在攝影機下方) ---
   push();
   if (gameState === "LOADING") {
-    drawLoadingScreen();
+    drawLoadingScreen(videoY, vHeight);
+  } else if (gameState === "COUNTDOWN") {
+    drawCountdownScreen(videoY, vHeight);
   } else if (gameState === "PLAYING") {
-    handlePlaying();
+    handlePlaying(videoY, vHeight);
   } else if (gameState === "RESULT") {
-    drawResultScreen();
+    drawResultScreen(videoY, vHeight);
   } else if (gameState === "GAMEOVER") {
     drawGameOverScreen();
   }
@@ -65,11 +71,21 @@ function windowResized() {
   resizeCanvas(windowWidth, windowHeight);
 }
 
-// --- 遊戲邏輯 ---
+// --- 遊戲邏輯與狀態切換 ---
 
-function handlePlaying() {
+function startCountdown() {
+  gameState = "COUNTDOWN";
+  countdownStart = millis();
+}
+
+function handlePlaying(videoY, vHeight) {
+  let uiY = videoY + (vHeight / 2) + 60; // 確保文字在影片下方
+  
   fill(0);
-  text("請出拳：✊ 🖐 ✌️", width / 2, 50);
+  textSize(32);
+  text("請出拳！", width / 2, uiY);
+  textSize(48);
+  text("✊ 🖐 ✌️", width / 2, uiY + 60);
   
   if (hands.length > 0) {
     let gesture = analyzeGesture(hands[0].keypoints);
@@ -85,25 +101,20 @@ function handlePlaying() {
 }
 
 function analyzeGesture(lm) {
-  // ml5 1.x 的 keypoints 格式為 {x, y}
   let d_index = dist(lm[8].x, lm[8].y, lm[0].x, lm[0].y);
   let d_middle = dist(lm[12].x, lm[12].y, lm[0].x, lm[0].y);
   let d_ring = dist(lm[16].x, lm[16].y, lm[0].x, lm[0].y);
   let d_pinky = dist(lm[20].x, lm[20].y, lm[0].x, lm[0].y);
 
-  // --- 1. 石頭剪刀布判斷 ---
   if (d_index < 150 && d_middle < 150 && d_ring < 150) return "石頭";
   if (d_index > 200 && d_middle > 200 && d_ring > 200 && d_pinky > 200) return "布";
   if (d_index > 200 && d_middle > 200 && d_ring < 150) return "剪刀";
 
-  // --- 2. 三角形 (繼續遊戲) --- 
-  // 邏輯：食指、中指、拇指指尖靠得很近
-  let triDist = dist(lm[8][0], lm[8][1], lm[4][0], lm[4][1]);
+  // 修正：ml5 1.x 必須使用 .x 和 .y
+  let triDist = dist(lm[8].x, lm[8].y, lm[4].x, lm[4].y);
   if (triDist < 50 && d_index > 150) return "三角形";
 
-  // --- 3. 叉叉 (結束遊戲) ---
-  // 邏輯：食指與中指交叉 (簡化判定：食指與中指距離極近且伸直)
-  let crossDist = dist(lm[8][0], lm[8][1], lm[12][0], lm[12][1]);
+  let crossDist = dist(lm[8].x, lm[8].y, lm[12].x, lm[12].y);
   if (crossDist < 30 && d_index > 200 && d_middle > 200) return "叉叉";
 
   return "未知";
@@ -119,42 +130,76 @@ function checkWinner(p, c) {
 
 // --- 介面呈現函式 ---
 
-function drawLoadingScreen() {
-  fill(0, 150);
-  rect(0, 0, width, height);
-  fill(255);
-  text("載入 AI 手勢辨識中...", width / 2, height / 2);
-  text("請允許攝影機存取", width / 2, height / 2 + 50);
+function drawLoadingScreen(videoY, vHeight) {
+  let uiY = videoY + (vHeight / 2) + 80;
+  fill(0);
+  textSize(24);
+  text("載入 AI 手勢辨識中...", width / 2, uiY);
+  text("請允許攝影機存取", width / 2, uiY + 40);
 }
 
-function drawResultScreen() {
-  fill(0, 180);
-  rect(0, 0, width, height);
-  fill(255);
-  text(`你出：${playerChoice} vs 電腦：${computerChoice}`, width / 2, height / 2 - 50);
-  textSize(48);
-  text(resultText, width / 2, height / 2 + 20);
+function drawCountdownScreen(videoY, vHeight) {
+  let uiY = videoY + (vHeight / 2) + 100;
+  let elapsed = millis() - countdownStart;
   
-  textSize(24);
-  fill(0, 255, 0);
-  text("△ 比出三角形：繼續挑戰", width / 2, height / 2 + 100);
-  fill(255, 0, 0);
-  text("X 比出叉叉：結束遊戲", width / 2, height / 2 + 140);
+  fill(0);
+  textSize(80);
+  
+  if (elapsed < 1000) {
+    text("3", width / 2, uiY);
+  } else if (elapsed < 2000) {
+    text("2", width / 2, uiY);
+  } else if (elapsed < 3000) {
+    text("1", width / 2, uiY);
+  } else {
+    gameState = "PLAYING"; // 倒數結束，切換到偵測出拳狀態
+  }
+}
 
-  // 偵測後續手勢
-  if (millis() - lastGestureTime > gestureCooldown && predictions.length > 0) {
-    let g = analyzeGesture(predictions[0].landmarks);
-    if (g === "三角形") gameState = "PLAYING";
-    if (g === "叉叉") gameState = "GAMEOVER";
+function drawResultScreen(videoY, vHeight) {
+  let uiY = videoY + (vHeight / 2) + 60;
+  
+  // 顯示玩家與電腦的出拳
+  fill(0);
+  textSize(24);
+  text(`你：${playerChoice}`, width / 4, uiY);
+  text(`電腦：${computerChoice}`, (width / 4) * 3, uiY);
+  
+  textSize(60);
+  text(gestureEmoji[playerChoice], width / 4, uiY + 60);
+  text(gestureEmoji[computerChoice], (width / 4) * 3, uiY + 60);
+
+  // 顯示輸贏結果
+  textSize(40);
+  if (resultText.includes("贏")) fill(0, 150, 0); // 綠色
+  else if (resultText.includes("輸")) fill(200, 0, 0); // 紅色
+  else fill(0); // 平手黑色
+  text(resultText, width / 2, uiY + 140);
+  
+  // 顯示操作提示
+  textSize(18);
+  fill(0, 100);
+  text("△ 雙手比三角形：再來一局", width / 2, height - 80);
+  text("X 雙手比叉叉：結束遊戲", width / 2, height - 50);
+
+  // 偵測後續手勢 (加入冷卻時間避免誤判)
+  if (millis() - lastGestureTime > gestureCooldown && hands.length > 0) {
+    let g = analyzeGesture(hands[0].keypoints);
+    if (g === "三角形") {
+      startCountdown(); // 重新倒數
+    }
+    if (g === "叉叉") {
+      gameState = "GAMEOVER";
+    }
   }
 }
 
 function drawGameOverScreen() {
-  fill(0, 230);
-  rect(0, 0, width, height);
+  fill(0, 200);
+  rect(0, 0, width, height); // 蓋住全螢幕
   fill(255);
   textSize(50);
   text("遊戲結束", width / 2, height / 2);
   textSize(20);
-  text("重新掃描 QR Code 以再次遊玩", width / 2, height / 2 + 60);
+  text("重新掃描 QR Code 或重整網頁以再次遊玩", width / 2, height / 2 + 60);
 }
