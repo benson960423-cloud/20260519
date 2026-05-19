@@ -14,7 +14,7 @@ let lastMatchTime = 0;
 let isCameraStarted = false;
 
 function preload() {
-  handPose = ml5.handPose();
+  handPose = ml5.handPose({ flipped: true }); // 初始化時可設定預設翻轉
 }
 
 function setup() {
@@ -61,57 +61,54 @@ function touchStarted() {
 }
 
 function draw() {
-  background('#c6ffcb');
+  background('#e7c6ff'); // 背景顏色設為指定色
 
   // 1. 畫布正上方的學生資訊文字
   fill(50);
   noStroke();
-  textSize(28); // 稍微縮小字體以符合手機螢幕
+  textSize(24);
   textAlign(CENTER, TOP);
   text("414730894呂承諺", width / 2, 20);
 
   if (!isCameraStarted || !video) {
     fill(94, 84, 142);
-    textSize(20);
+    textSize(18);
     textAlign(CENTER, CENTER);
-    text(" 遊戲載入中...\n\n若畫面沒有反應，請點擊螢幕\n允許相機權限喔！", width / 2, height / 2);
+    text("攝影機啟動中...", width / 2, height / 2);
     return;
   }
 
-  // 【手機版畫面適應】：讓視訊畫面能完美塞進手機螢幕
-  let imgW = width * 0.85; // 寬度佔螢幕 85%
-  let imgH = (imgW / video.width) * video.height; // 依比例計算高度
-  let offsetX = (width - imgW) / 2;
-  let offsetY = 80; // 留給上方文字空間
+  // 設定影像大小為畫布的 50%
+  let imgW = width * 0.5;
+  let imgH = height * 0.5;
 
-  // 繪製攝影機影像
-  image(video, offsetX, offsetY, imgW, imgH);
-
-  // UI 往下推，放在視訊畫面下方
-  drawGameUI(offsetY + imgH);
+  // 繪製攝影機影像：置中 + 水平翻轉
+  push();
+  translate(width / 2, height / 2); // 移到畫布中心
+  scale(-1, 1); // 左右翻轉實現鏡像
+  image(video, -imgW / 2, -imgH / 2, imgW, imgH); // 影像繪製在變換後的中心
 
   if (hands.length > 0) {
     for (let hand of hands) {
       if (hand.confidence > 0.1) {
-        
         if (millis() - lastMatchTime > 500) {
           judgeGesture(hand);
         }
-
         let handColor = hand.handedness == "Left" ? color(255, 0, 255) : color(255, 255, 0);
         strokeWeight(3);
         stroke(handColor);
-        drawFinger(hand, 0, 4, offsetX, offsetY, imgW, imgH);  
-        drawFinger(hand, 5, 8, offsetX, offsetY, imgW, imgH);  
-        drawFinger(hand, 9, 12, offsetX, offsetY, imgW, imgH);  
-        drawFinger(hand, 13, 16, offsetX, offsetY, imgW, imgH);
-        drawFinger(hand, 17, 20, offsetX, offsetY, imgW, imgH);
+        drawFinger(hand, 0, 4, -imgW / 2, -imgH / 2, imgW, imgH);  
+        drawFinger(hand, 5, 8, -imgW / 2, -imgH / 2, imgW, imgH);  
+        drawFinger(hand, 9, 12, -imgW / 2, -imgH / 2, imgW, imgH);  
+        drawFinger(hand, 13, 16, -imgW / 2, -imgH / 2, imgW, imgH);
+        drawFinger(hand, 17, 20, -imgW / 2, -imgH / 2, imgW, imgH);
 
         noStroke();
         for (let i = 0; i < hand.keypoints.length; i++) {
           let kp = hand.keypoints[i];
-          let kx = map(kp.x, 0, video.width, offsetX, offsetX + imgW);
-          let ky = map(kp.y, 0, video.height, offsetY, offsetY + imgH);
+          // 映射座標到 transformed 的 50% 影像區域
+          let kx = map(kp.x, 0, video.width, -imgW / 2, imgW / 2);
+          let ky = map(kp.y, 0, video.height, -imgH / 2, imgH / 2);
           
           fill(handColor);
           circle(kx, ky, 8); // 手機上圓點稍微縮小一點點
@@ -125,7 +122,13 @@ function draw() {
         }
       }
     }
-  } else {
+  }
+  pop(); // 結束鏡像矩陣轉換
+
+  // UI 放在影像下方 (外面才不會被翻轉)
+  drawGameUI(height / 2 + imgH / 2 + 20);
+
+  if (hands.length === 0) {
     playerChoice = "請把手放到畫面中...";
   }
 
